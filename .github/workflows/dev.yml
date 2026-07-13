@@ -1,0 +1,91 @@
+name: Dev Deployment
+
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - 'k8s/dev/**'
+
+  push:
+    branches:
+      - dev
+
+env:
+  PROJECT_ID: your-project-id
+  GAR_LOCATION: asia-south1
+  REPOSITORY: ecommerce
+  IMAGE_NAME: ecommerce
+
+jobs:
+
+  dry-run:
+    if: github.event_name == 'pull_request'
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Kubernetes Validation
+        run: |
+
+          kubectl apply \
+            --dry-run=client \
+            -f k8s/dev/
+
+  deploy:
+    if: github.event_name == 'push'
+
+    runs-on: ubuntu-latest
+
+    environment: dev
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.GKE_CLUSTER }}
+          location: ${{ secrets.GKE_REGION }}
+
+      - name: Build Docker Image
+        run: |
+
+          docker build -t us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+      - name: Configure Docker
+        run: |
+
+          gcloud auth configure-docker us-central1-docker.pkg.dev
+
+      - name: Push Image
+        run: |
+
+          docker push us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Update Image
+        run: |
+
+          sed -i "s|IMAGE_TAG|${{ github.sha }}|g" k8s/dev/deployment.yaml
+
+      - name: Deploy
+        run: |
+
+          kubectl apply -f k8s/dev/
+
+      - name: Verify
+        run: |
+
+          kubectl rollout status deployment/ecommerce \
+            -n dev
